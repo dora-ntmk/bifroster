@@ -81,7 +81,7 @@ const startDiscordClient = async ({
     discordEntityResolver.setDiscordClient(client);
     discordStatsService.setClient(client);
 
-    const messageTransformer = new DiscordMessageTransformer();
+    const messageTransformer = new DiscordMessageTransformer(linkService);
     const messageRelay = new DiscordToFluxerMessageRelay({
         linkService,
         webhookService,

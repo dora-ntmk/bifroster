@@ -11,6 +11,7 @@ import { buildDiscordStickerUrl } from '../../utils/buildStickerUrl';
 import { getPollMessage } from '../../utils/pollMessageFormatter';
 import WebhookEmbed, { WebhookEmbedFooter } from '../WebhookEmbed';
 import { GeneralEmoji } from '../../utils/emojis';
+import { LinkService } from '../LinkService';
 
 type DiscordMessage = OmitPartialGroupDMChannel<Message<boolean>>;
 
@@ -18,6 +19,21 @@ export default class DiscordMessageTransformer extends MessageTransformer<
     DiscordMessage,
     WebhookMessageData
 > {
+    constructor(private readonly linkService: LinkService) {
+        super();
+    }
+
+    private async displayName(message: DiscordMessage): Promise<string> {
+        const member =
+            message.member ??
+            (!message.webhookId && message.guild
+                ? await message.guild.members
+                      .fetch(message.author.id)
+                      .catch(() => null)
+                : null);
+        return member?.displayName ?? message.author.displayName;
+    }
+
     private stickerFormatToExtension(format: number): string {
         switch (format) {
             case 1:
@@ -115,6 +131,7 @@ export default class DiscordMessageTransformer extends MessageTransformer<
         message: DiscordMessage,
         fluxerEmojis: GeneralEmoji[] = []
     ): Promise<WebhookMessageData> {
+        const username = await this.displayName(message);
         const sanitizedContent = this.sanitizeContent(message);
         const emojiReplacedContent = this.replaceEmojis(
             sanitizedContent,
@@ -140,19 +157,38 @@ export default class DiscordMessageTransformer extends MessageTransformer<
             : emojiReplacedContent;
 
         const embeds: WebhookEmbed[] = this.buildRichEmbeds(message);
+        let replyToMessageId: string | undefined;
+        let replyEmbed: WebhookEmbed | undefined;
 
         if (message.reference) {
             const isForwarded = message.flags.has(MessageFlags.HasSnapshot);
+            if (!isForwarded && message.reference.messageId) {
+                const replyLink =
+                    await this.linkService.getMessageLinkByDiscordMessageId(
+                        message.reference.messageId
+                    );
+                const channelLink =
+                    await this.linkService.getChannelLinkByDiscordChannelId(
+                        message.channelId
+                    );
+                if (replyLink && replyLink.channelLinkId === channelLink?.id) {
+                    replyToMessageId = replyLink.fluxerMessageId;
+                }
+            }
+            const replyMessage = isForwarded
+                ? null
+                : await message.fetchReference().catch(() => null);
             const referencedMessage = isForwarded
                 ? message.messageSnapshots.first()
-                : await message.fetchReference();
+                : replyMessage;
             if (!referencedMessage) {
                 return {
                     content: messageContent,
-                    username: message.author.username,
+                    username,
                     avatarURL: message.author.avatarURL() || '',
                     attachments: attachments,
                     embeds,
+                    replyToMessageId,
                 };
             }
 
@@ -165,6 +201,9 @@ export default class DiscordMessageTransformer extends MessageTransformer<
             const refrenceEmoji = isForwarded ? '⏩' : '↩️';
             if (content && content.trim() !== '') {
                 const referencedAuthor = referencedMessage.author;
+                const referencedName = replyMessage
+                    ? await this.displayName(replyMessage)
+                    : referencedAuthor?.displayName;
                 const footer = isForwarded
                     ? this.buildForwardSourceFooter(message)
                     : null;
@@ -174,14 +213,17 @@ export default class DiscordMessageTransformer extends MessageTransformer<
                         color: 0x0b0d0e,
                         author: {
                             name: referencedAuthor
-                                ? `${referencedAuthor.username} ${refrenceEmoji}`
+                                ? `${referencedName} ${refrenceEmoji}`
                                 : `Forwarded message ${refrenceEmoji}`,
                             iconURL: referencedAuthor?.avatarURL() || undefined,
                         },
                         footer,
                     })
                 );
-            } else if (attachments.length > 0 || embeds.length > 0) {
+            } else if (
+                isForwarded &&
+                (attachments.length > 0 || embeds.length > 0)
+            ) {
                 embeds.unshift(
                     new WebhookEmbed({
                         description: `Forwarded message ${refrenceEmoji}`,
@@ -190,14 +232,19 @@ export default class DiscordMessageTransformer extends MessageTransformer<
                     })
                 );
             }
+            if (!isForwarded && content && content.trim() !== '') {
+                replyEmbed = embeds.shift();
+            }
         }
 
         return {
             content: messageContent,
-            username: message.author.username,
+            username,
             avatarURL: message.author.avatarURL() || '',
             attachments: attachments,
             embeds,
+            replyToMessageId,
+            replyEmbed,
         };
     }
 }

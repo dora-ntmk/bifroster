@@ -10,6 +10,20 @@ export default class FluxerMessageTransformer extends MessageTransformer<
     Message,
     WebhookMessageData
 > {
+    private async displayName(message: Message): Promise<string> {
+        const member =
+            !message.webhookId && message.guild
+                ? await message.guild.members
+                      .resolve(message.author.id)
+                      .catch(() => null)
+                : null;
+        return (
+            member?.displayName ??
+            message.author.globalName ??
+            message.author.username
+        );
+    }
+
     private sanitizeContent(message: Message): string {
         return breakMentions(
             sanitizeMentions(message.content, {
@@ -81,7 +95,10 @@ export default class FluxerMessageTransformer extends MessageTransformer<
                     description: `${content}`,
                     color: 0x252529,
                     author: {
-                        name: message.referencedMessage.author.username + ' ↩️',
+                        name:
+                            (await this.displayName(
+                                message.referencedMessage
+                            )) + ' ↩️',
                         iconURL:
                             message.referencedMessage.author.avatarURL() ||
                             undefined,
@@ -93,7 +110,7 @@ export default class FluxerMessageTransformer extends MessageTransformer<
 
         return {
             content: emojiReplacedContent,
-            username: message.author.username,
+            username: await this.displayName(message),
             avatarURL: message.author.avatarURL() || '',
             attachments: attachments,
             embeds,

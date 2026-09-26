@@ -22,6 +22,8 @@ export type SerializableWebhookMessageData = {
     avatarURL: string;
     attachments?: WebhookAttachment[];
     embeds?: SerializableEmbed[];
+    replyToMessageId?: string;
+    replyEmbed?: SerializableEmbed;
 };
 
 export function toSerializable(
@@ -30,6 +32,7 @@ export function toSerializable(
     return {
         ...data,
         embeds: data.embeds?.map((e) => e.toPlainObject()),
+        replyEmbed: data.replyEmbed?.toPlainObject(),
     };
 }
 
@@ -39,6 +42,9 @@ function toWebhookMessageData(
     return {
         ...data,
         embeds: data.embeds?.map((e) => WebhookEmbed.fromPlainObject(e)),
+        replyEmbed: data.replyEmbed
+            ? WebhookEmbed.fromPlainObject(data.replyEmbed)
+            : undefined,
     };
 }
 

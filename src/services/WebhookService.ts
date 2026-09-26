@@ -28,6 +28,8 @@ export type WebhookMessageData = {
     avatarURL: string;
     attachments?: WebhookAttachment[];
     embeds?: WebhookEmbed[];
+    replyToMessageId?: string;
+    replyEmbed?: WebhookEmbed;
 };
 
 export class WebhookService {
@@ -225,8 +227,16 @@ export class WebhookService {
         data: WebhookMessageData
     ): Promise<{ messageId: string }> {
         try {
+            const options = {
+                replyTo: data.replyToMessageId
+                    ? { messageId: data.replyToMessageId }
+                    : undefined,
+                allowedMentions: { parse: [], repliedUser: false },
+                ping: false,
+            };
             const msg = await webhook.send(
                 {
+                    ...options,
                     content: data.content,
                     username: data.username,
                     avatarUrl: data.avatarURL,
@@ -245,9 +255,12 @@ export class WebhookService {
                                 ? MessageAttachmentFlags.IS_SPOILER
                                 : undefined,
                         })) || [],
-                    embeds:
-                        data.embeds?.map((embed) => embed.toFluxerEmbed()) ||
-                        [],
+                    embeds: [
+                        ...(!data.replyToMessageId && data.replyEmbed
+                            ? [data.replyEmbed]
+                            : []),
+                        ...(data.embeds || []),
+                    ].map((embed) => embed.toFluxerEmbed()),
                 },
                 true
             );
@@ -260,6 +273,20 @@ export class WebhookService {
 
             return { messageId: msg.id };
         } catch (error: unknown) {
+            // The target may have been deleted after the mapping was saved.
+            // Retry only a rejected reference, never an ambiguous send failure.
+            if (
+                data.replyToMessageId &&
+                typeof error === 'object' &&
+                error !== null &&
+                'code' in error &&
+                error.code === 'UNKNOWN_MESSAGE'
+            ) {
+                return this.sendMessageViaFluxerWebhook(webhook, {
+                    ...data,
+                    replyToMessageId: undefined,
+                });
+            }
             logger.error('Error sending message via Fluxer webhook:', error);
             throw error;
         }
@@ -271,12 +298,19 @@ export class WebhookService {
         data: WebhookMessageData
     ): Promise<void> {
         try {
+            // References cannot be changed on edit. Preserve the original
+            // representation even if the reply mapping has changed since send.
+            const original =
+                data.replyEmbed || data.replyToMessageId
+                    ? await webhook.fetchMessage(messageId)
+                    : null;
             const route =
                 FluxerRoutes.webhookExecute(webhook.id, webhook.token!) +
                 `/messages/${messageId}`;
             await webhook.client.rest.patch(route, {
                 body: {
                     content: data.content,
+                    allowed_mentions: { parse: [], replied_user: false },
                     attachments:
                         data.attachments?.map((attachment, index) => ({
                             id: index,
@@ -286,9 +320,12 @@ export class WebhookService {
                                 ? MessageAttachmentFlags.IS_SPOILER
                                 : undefined,
                         })) || [],
-                    embeds:
-                        data.embeds?.map((embed) => embed.toFluxerEmbed()) ||
-                        [],
+                    embeds: [
+                        ...(!original?.messageReference && data.replyEmbed
+                            ? [data.replyEmbed]
+                            : []),
+                        ...(data.embeds || []),
+                    ].map((embed) => embed.toFluxerEmbed()),
                 },
                 auth: false,
             });
